@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tayseer | Chat</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: linear-gradient(135deg, #051a1a 0%, #0a3d3d 100%);
+            color: #ccf5f5;
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+        .sidebar {
+            width: 280px;
+            background: rgba(5, 26, 26, 0.9);
+            border-right: 1px solid #0f5c5c;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+        }
+        .sidebar h2 { font-size: 14px; text-transform: uppercase; color: #88dddd; margin-bottom: 16px; }
+        .world-list { flex: 1; overflow-y: auto; }
+        .object-card {
+            background: rgba(15, 92, 92, 0.4);
+            border: 1px solid #0f5c5c;
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 10px;
+            font-size: 13px;
+        }
+        .object-name { font-weight: 600; color: #20b2b2; margin-bottom: 4px; }
+        .object-coords { font-family: monospace; color: #147a7a; font-size: 12px; }
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            padding: 20px 30px;
+            border-bottom: 1px solid #0f5c5c;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 20px; color: #20b2b2; }
+        .conn { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; transition: 0.3s; }
+        .dot.connected { background: #22c55e; box-shadow: 0 0 10px #22c55e; }
+        .chat-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 30px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .msg {
+            max-width: 70%;
+            padding: 14px 18px;
+            border-radius: 16px;
+            font-size: 15px;
+            line-height: 1.5;
+            animation: fadeIn 0.3s ease;
+        }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .msg.user { align-self: flex-end; background: linear-gradient(135deg, #20b2b2 0%, #147a7a 100%); color: #051a1a; border-bottom-right-radius: 4px; }
+        .msg.bot { align-self: flex-start; background: rgba(15, 92, 92, 0.6); border: 1px solid #0f5c5c; border-bottom-left-radius: 4px; }
+        .msg.bot.thinking { color: #88dddd; font-style: italic; }
+        .options {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .option-btn {
+            padding: 8px 16px;
+            background: rgba(32, 178, 178, 0.1);
+            border: 1px solid #20b2b2;
+            border-radius: 20px;
+            color: #20b2b2;
+            font-size: 13px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .option-btn:hover { background: #20b2b2; color: #051a1a; }
+        .input-area {
+            padding: 20px 30px;
+            border-top: 1px solid #0f5c5c;
+            display: flex;
+            gap: 12px;
+        }
+        .input-area input {
+            flex: 1;
+            padding: 14px 20px;
+            background: rgba(5, 26, 26, 0.6);
+            border: 1px solid #0f5c5c;
+            border-radius: 12px;
+            color: #ccf5f5;
+            font-size: 15px;
+            outline: none;
+        }
+        .input-area input:focus { border-color: #20b2b2; }
+        .input-area button {
+            padding: 14px 28px;
+            background: linear-gradient(135deg, #20b2b2 0%, #147a7a 100%);
+            border: none;
+            border-radius: 12px;
+            color: #051a1a;
+            font-weight: 700;
+            font-size: 15px;
+            cursor: pointer;
+        }
+        .input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .status-bar {
+            padding: 8px 30px;
+            background: rgba(5, 26, 26, 0.6);
+            border-top: 1px solid #0f5c5c;
+            font-size: 12px;
+            color: #147a7a;
+            display: flex;
+            gap: 20px;
+        }
+        .status-badge { display: flex; align-items: center; gap: 6px; }
+        .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #147a7a; }
+        .status-dot.planning { background: #f59e0b; }
+        .status-dot.executing { background: #20b2b2; }
+        .status-dot.completed { background: #22c55e; }
+        .status-dot.failed { background: #ef4444; }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h2>World State</h2>
+        <div class="world-list" id="world-list">
+            <div style="color:#147a7a; text-align:center; padding:40px 0;">Waiting for objects...</div>
+        </div>
+    </div>
+    
+    <div class="main">
+        <div class="header">
+            <h1>Tayseer</h1>
+            <div class="conn">
+                <div class="dot" id="conn-dot"></div>
+                <span id="conn-text">Disconnected</span>
+            </div>
+        </div>
+        
+        <div class="chat-area" id="chat-area">
+            <div class="msg bot">
+⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦<br>
+⣿⣿⣿⣿⣿⣿⠿⠿⠿⠿⠿⢿⣿⣿⣿⣿⣿⣿⡿⠿⠿⠿⠿⠿⣿⣿⣿⣿⣿⣿<br>
+⣿⣿⣿⣿⣿⠃⠀⠀⠀⠀⠀⠀⢹⣿⣿⣿⣿⠏⠀⠀⠀⠀⠀⠀⠘⣿⣿⣿⣿⣿<br>
+⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⠀⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿<br>
+⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⠀⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿<br>
+⣿⣿⣿⣿⣿⡀⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⡆⠀⠀⠀⠀⠀⠀⢀⣿⣿⣿⣿⣿<br>
+⣿⣿⣿⣿⣿⣷⣦⣤⣤⣤⣤⣴⣿⣿⣿⣿⣿⣿⣦⣤⣤⣤⣤⣴⣾⣿⣿⣿⣿⣿<br>
+⢻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡟<br>
+⢀⣈⣉⣉⣉⡉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠁⠀<br>
+⠈⠉⢹⡏⢉⣁⣀⣀⣀⡀⠀⠀⣀⢀⣀⣀⠀⢀⣀⣀⠀⠀⣀⣀⡀⢀⣀⣀⡀⠀<br>
+⠀⠀⢸⡇⣨⣭⣭⣿⣿⡇⠀⢸⣿⢿⣭⣙⣣⣿⣉⣉⣿⣾⣋⣉⣻⣾⡏⠉⠁⠀<br>
+⠀⠀⢸⡇⢿⣥⣤⣿⡽⣧⣤⣼⣿⢶⣤⣭⡟⢿⣍⣩⡭⢻⣯⣩⣽⢿⡇⠀⠀⠀<br>
+⠀⠀⠀⠀⠀⠀⠀⠀⢠⣤⣤⣼⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀</div>
+            <div class="msg bot">Hello! I'm Tayseer. Tell me what you'd like me to do.</div>
+        </div>
+        
+        <div class="input-area">
+            <input type="text" id="msg-input" placeholder="e.g., Move the blue cube to the shelf" autofocus>
+            <button id="send-btn" onclick="sendMessage()">Send</button>
+        </div>
+        
+        <div class="status-bar">
+            <div class="status-badge">
+                <div class="status-dot" id="status-dot"></div>
+                <span id="status-text">Idle</span>
+            </div>
+            <span id="status-detail"></span>
+        </div>
+    </div>
+
+    <script>
+        const ws = new WebSocket('ws://' + window.location.host + '/ws');
+        const chatArea = document.getElementById('chat-area');
+        const input = document.getElementById('msg-input');
+        const sendBtn = document.getElementById('send-btn');
+        const connDot = document.getElementById('conn-dot');
+        const connText = document.getElementById('conn-text');
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const statusDetail = document.getElementById('status-detail');
+        let isExecuting = false;
+
+        ws.onopen = () => {
+            connDot.classList.add('connected');
+            connText.textContent = 'Connected';
+        };
+        ws.onclose = () => {
+            connDot.classList.remove('connected');
+            connText.textContent = 'Disconnected';
+        };
+
+        ws.onmessage = (event) => {
+            const payload = JSON.parse(event.data);
+            
+            if (payload.type === 'world_state') {
+                renderWorld(payload.data);
+            } else if (payload.type === 'chat') {
+                addBotMessage(payload.data.content, payload.data.options);
+                isExecuting = false;
+                updateInputState();
+            } else if (payload.type === 'status') {
+                updateStatus(payload.data);
+                if (payload.data.status === 'thinking') {
+                    addThinking();
+                } else if (payload.data.status === 'executing') {
+                    isExecuting = true;
+                    updateInputState();
+                    removeThinking();
+                } else if (['completed', 'failed', 'idle'].includes(payload.data.status)) {
+                    isExecuting = false;
+                    updateInputState();
+                    removeThinking();
+                }
+            } else if (payload.type === 'plan') {
+                // Optional: show plan in a subtle way
+            }
+        };
+
+        function sendMessage() {
+            const text = input.value.trim();
+            if (!text || isExecuting) return;
+            addUserMessage(text);
+            ws.send(JSON.stringify({type: 'message', data: text}));
+            input.value = '';
+            addThinking();
+        }
+
+        function sendOption(text) {
+            if (isExecuting) return;
+            addUserMessage(text);
+            ws.send(JSON.stringify({type: 'message', data: text}));
+            addThinking();
+            // Remove option buttons from last bot message
+            document.querySelectorAll('.options').forEach(el => el.remove());
+        }
+
+        function addUserMessage(text) {
+            const div = document.createElement('div');
+            div.className = 'msg user';
+            div.textContent = text;
+            chatArea.appendChild(div);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        function addBotMessage(text, options) {
+            removeThinking();
+            const div = document.createElement('div');
+            div.className = 'msg bot';
+            div.textContent = text;
+            
+            if (options && options.length > 0) {
+                const optsDiv = document.createElement('div');
+                optsDiv.className = 'options';
+                options.forEach(opt => {
+                    const btn = document.createElement('button');
+                    btn.className = 'option-btn';
+                    btn.textContent = opt;
+                    btn.onclick = () => sendOption(opt);
+                    optsDiv.appendChild(btn);
+                });
+                div.appendChild(optsDiv);
+            }
+            
+            chatArea.appendChild(div);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        function addThinking() {
+            if (document.getElementById('thinking-msg')) return;
+            const div = document.createElement('div');
+            div.id = 'thinking-msg';
+            div.className = 'msg bot thinking';
+            div.textContent = 'Tayseer is thinking...';
+            chatArea.appendChild(div);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        function removeThinking() {
+            const el = document.getElementById('thinking-msg');
+            if (el) el.remove();
+        }
+
+        function renderWorld(objects) {
+            const container = document.getElementById('world-list');
+            if (!objects || Object.keys(objects).length === 0) {
+                container.innerHTML = '<div style="color:#147a7a; text-align:center; padding:40px 0;">No objects</div>';
+                return;
+            }
+            container.innerHTML = Object.entries(objects).map(([name, info]) => {
+                const pos = info.position || [0,0,0];
+                return `<div class="object-card">
+                    <div class="object-name">${name}</div>
+                    <div class="object-coords">[${pos.map(v => v.toFixed(2)).join(', ')}]</div>
+                </div>`;
+            }).join('');
+        }
+
+        function updateStatus(data) {
+            statusText.textContent = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+            statusDetail.textContent = data.detail || '';
+            statusDot.className = 'status-dot ' + data.status;
+        }
+
+        function updateInputState() {
+            input.disabled = isExecuting;
+            sendBtn.disabled = isExecuting;
+        }
+
+        input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+    </script>
+</body>
+</html>

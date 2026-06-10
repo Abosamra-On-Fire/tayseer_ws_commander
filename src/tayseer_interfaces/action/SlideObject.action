@@ -1,0 +1,14 @@
+# Goal
+string object_name
+float32[3] object_position
+string direction              # "north", "south", "east", "west", or vector
+float32 distance
+---
+# Result
+bool success
+string message
+float32[3] final_position
+---
+# Feedback
+string stage
+float32 progress

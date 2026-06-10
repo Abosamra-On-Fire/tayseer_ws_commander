@@ -1,0 +1,6 @@
+string object_name
+geometry_msgs/Point position
+string frame_id
+float32 confidence
+---
+bool success

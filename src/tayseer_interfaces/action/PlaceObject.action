@@ -1,0 +1,12 @@
+# Goal
+string object_name
+float32[3] target_position
+string target_location_name   # e.g., "shelf", "table"
+---
+# Result
+bool success
+string message
+---
+# Feedback
+string stage
+float32 progress
