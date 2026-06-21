@@ -14,9 +14,8 @@ find_package(geometry_msgs REQUIRED)
 # find_package(<dependency> REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "action/NavigateToObject.action"
-  "action/PickObject.action"
-  "action/PlaceObject.action"
+  "action/Navigate.action"
+  "action/ArmManipulation.action"
   "action/SlideObject.action"
   "srv/GetObjectLocation.srv"
   "srv/ListObjects.srv"

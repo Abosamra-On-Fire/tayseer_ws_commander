@@ -92,18 +92,18 @@ class WorldModelNode(Node):
         """Called by Perception node when object detected."""
         # Parse object name from header.frame_id or a dedicated field
         # Adjust based on your Perception node's output format
-        object_name = msg.header.frame_id  # e.g., "blue_cube"
+        object_name = msg.header.frame_id   # now correctly 'mug', 'truck', etc.
 
         with self.lock:
             obj_data = {
                 'position': [
                     msg.pose.position.x,
                     msg.pose.position.y,
-                    msg.pose.position.z
+                    msg.pose.position.z,
                 ],
-                'frame_id': msg.header.frame_id,
+                'frame_id': 'map',              # pose is always in map frame
                 'last_seen': datetime.now().isoformat(),
-                'confidence': 0.95  # Get from perception if available
+                'confidence': 0.95,
             }
             self.objects[object_name] = obj_data
             self._upsert_object(object_name, obj_data)
