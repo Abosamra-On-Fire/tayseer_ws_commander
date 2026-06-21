@@ -13,20 +13,22 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/config', glob('config/*')),
-        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
+        # This is how your PROMPT_PATH gets installed
+        (os.path.join('share', package_name, 'config'),
+            glob('config/*.txt')),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
     ],
-    install_requires=['setuptools', 'google-generativeai', 'python-dotenv'],
+    install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='kareem abosmara',
-    maintainer_email='kareem.abosamra02@eng-st.cu.edu.eg',
-    description='Commander node for Tayseer robot',
+    maintainer='Your Name',
+    maintainer_email='you@example.com',
+    description='LLM-based robot commander',
     license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'commander = tayseer_commander.commander_node:main',
             'world_model = tayseer_commander.world_model:main',
+            'commander  = tayseer_commander.commander_node:main',
         ],
     },
 )

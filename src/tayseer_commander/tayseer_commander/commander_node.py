@@ -5,7 +5,8 @@ from rclpy.action import ActionClient
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from tayseer_interfaces.srv import GetObjectLocation, ListObjects
-from tayseer_interfaces.action import NavigateToObject, PickObject, PlaceObject, SlideObject
+from tayseer_interfaces.action import ArmManipulation, SlideObject
+from tayseer_interfaces.action import Navigate
 from tayseer_commander.llm_client import GroqLLMClient
 import json
 import threading
@@ -15,48 +16,51 @@ import time
 class CommanderNode(Node):
     def __init__(self):
         super().__init__('commander')
-        
+
         self.declare_parameter('groq_api_key', '') 
         self.declare_parameter('max_replan_attempts', 2)
-        
+
         api_key = self.get_parameter('groq_api_key').value
         self.llm = GroqLLMClient(api_key)
-        
-        #srv clients
+
+        # srv clients
         self.get_location_cli = self.create_client(GetObjectLocation, '/get_object_location')
         self.list_objects_cli = self.create_client(ListObjects, '/list_objects')
         self.get_logger().info("Waiting for World Model services...")
         self.get_location_cli.wait_for_service(timeout_sec=10.0)
         self.list_objects_cli.wait_for_service(timeout_sec=10.0)
-        
-        #act clients
-        self.navigate_client = ActionClient(self, NavigateToObject, '/navigate_to_object')
-        self.pick_client = ActionClient(self, PickObject, '/pick_object')
-        self.place_client = ActionClient(self, PlaceObject, '/place_object')
+
+        # act clients
+        self.navigate_client = ActionClient(self, Navigate, '/navigate_to_goal')
+        self.arm_client = ActionClient(self, ArmManipulation, '/arm_manipulate')
         self.slide_client = ActionClient(self, SlideObject, '/slide_object')
-        
+
         self.get_logger().info("Waiting for action servers...")
-        self.navigate_client.wait_for_server(timeout_sec=10.0)
-        self.pick_client.wait_for_server(timeout_sec=10.0)
-        self.place_client.wait_for_server(timeout_sec=10.0)
+        if not self.navigate_client.wait_for_server(timeout_sec=10.0):
+            self.get_logger().warn("A* Navigator /navigate_to_goal not available yet — will retry on first use")
+        if self.arm_client is not None and self.arm_client.wait_for_server(timeout_sec=10.0):
+            self.get_logger().info("Action server connected! Ready to send goals.")
+        else:
+            self.get_logger().error("Action client not initialized or server timed out.")
+
         self.slide_client.wait_for_server(timeout_sec=10.0)
-        
+
         self.status_pub = self.create_publisher(String, '/commander_status', 10)
         self.plan_pub = self.create_publisher(String, '/commander_plan', 10)
         self.chat_pub = self.create_publisher(String, '/chat_message', 10)
-        
+
         self.create_subscription(String, '/user_prompt', self.message_callback, 10)
         self.create_service(Trigger, '/execute_prompt', self.manual_execute_callback)
-        
+
         self.state = "IDLE"
         self.conversation_history = []
         self.message_queue = []
         self.replan_attempts = 0
         self.max_replans = self.get_parameter('max_replan_attempts').value
-        
+
         self.worker = threading.Thread(target=self._worker_loop, daemon=True)
         self.worker.start()
-        
+
         self.get_logger().info("  Commander ready. Waiting for prompts...")
 
     def publish_status(self, status: str, detail: str = ""):
@@ -77,6 +81,7 @@ class CommanderNode(Node):
             "timestamp": self.get_clock().now().to_msg().sec
         })
         self.chat_pub.publish(msg)
+
     def publish_plan(self, plan_result: dict):
         msg = String()
         msg.data = json.dumps(plan_result)
@@ -84,21 +89,17 @@ class CommanderNode(Node):
 
     def get_world_state(self) -> dict:
         future = self.list_objects_cli.call_async(ListObjects.Request())
-        start = time.time()
-        while not future.done() and time.time() - start < 3.0:
-            time.sleep(0.01)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=3.0)
         if not future.done():
             self.get_logger().error("World Model list timeout")
             return {}
-        
+
         response = future.result()
         world_state = {}
         for obj_name in response.object_names:
             loc_future = self.get_location_cli.call_async(
                 GetObjectLocation.Request(object_name=obj_name))
-            start = time.time()
-            while not loc_future.done() and time.time() - start < 3.0:
-                time.sleep(0.01)
+            rclpy.spin_until_future_complete(self, loc_future, timeout_sec=3.0)
             if loc_future.done() and loc_future.result().found:
                 loc = loc_future.result()
                 world_state[obj_name] = {
@@ -134,17 +135,32 @@ class CommanderNode(Node):
 
     def _process_conversation(self):
         self.publish_status("thinking", "Tayseer is thinking...")
-        
+
         world_state = self.get_world_state()
         response = self.llm.generate_response(self.conversation_history, world_state)
-        
+
+        if isinstance(response, str):
+            try:
+                response = json.loads(response)
+            except json.JSONDecodeError:
+                self.get_logger().error(f"LLM returned non-JSON string: {response[:200]}")
+                self.publish_chat("assistant", "I received an unexpected response format. Please try again.")
+                self._reset_to_idle()
+                return
+
+        if not isinstance(response, dict):
+            self.get_logger().error(f"LLM returned unexpected type: {type(response)}")
+            self.publish_chat("assistant", "Internal error: invalid response type from language model.")
+            self._reset_to_idle()
+            return
+
         if response.get("error"):
             self.publish_chat("assistant", f"Sorry, I encountered an error: {response.get('reasoning', 'Unknown')}")
             self._reset_to_idle()
             return
-        
+
         mode = response.get("mode", "clarify")
-        
+
         if mode == "clarify":
             self.state = "CLARIFYING"
             question = response.get("question", "I need more information.")
@@ -158,23 +174,22 @@ class CommanderNode(Node):
             self.publish_status("denied", reason)
             self._reset_to_idle()
             return    
-        
+
         elif mode == "plan":
             self.state = "EXECUTING"
             self.replan_attempts = 0
             reasoning = response.get("reasoning", "Executing plan...")
             self.publish_chat("assistant", reasoning)
             self.conversation_history.append({"role": "assistant", "content": reasoning})
-            
+
             plan_msg = String()
             plan_msg.data = json.dumps(response)
             self.plan_pub.publish(plan_msg)
-            
+
             self._execute_plan_blocking(response)
         else:
             self.publish_chat("assistant", "I didn't understand. Can you rephrase?")
             self._reset_to_idle()
-
 
     def _execute_plan_blocking(self, plan_result: dict):
         plan = plan_result.get('plan', [])
@@ -182,9 +197,9 @@ class CommanderNode(Node):
             self.publish_chat("assistant", "I couldn't generate a valid plan.")
             self._reset_to_idle()
             return
-        
+
         self.publish_status("executing", f"Executing {len(plan)} actions")
-        
+
         i = 0
         while i < len(plan):
             step = plan[i]
@@ -210,13 +225,13 @@ class CommanderNode(Node):
                 self.get_logger().info(f"Step {i+1}/{len(plan)}: {action_type}")
                 self.publish_status("executing", f"Step {i+1}: {action_type}")
                 result = self._execute_action_blocking(action_type, params)
-            
+
             if result['success']:
                 self.get_logger().info(f"  Step {i+1} done: {result['message']}")
                 i += 1
             else:
                 self.get_logger().error(f"  Step {i+1} failed: {result['message']}")
-                
+
                 if self.replan_attempts < self.max_replans:
                     self.replan_attempts += 1
                     self.conversation_history.append({
@@ -224,8 +239,15 @@ class CommanderNode(Node):
                         "content": f"The action failed: {json.dumps(step)}. Error: {result['message']}. Please replan."
                     })
                     self.publish_chat("assistant", f"That didn't work ({result['message']}). Let me try a different approach...")
-                    
+
                     new_response = self.llm.generate_response(self.conversation_history, self.get_world_state())
+
+                    if not isinstance(new_response, dict):
+                        self.get_logger().error(f"Replan returned non-dict: {type(new_response)}")
+                        self.publish_chat("assistant", "Internal error during replanning. Please try again.")
+                        self._reset_to_idle()
+                        return
+
                     new_mode = new_response.get("mode")
                     if new_mode == "plan":
                         plan = new_response['plan']
@@ -246,18 +268,8 @@ class CommanderNode(Node):
                     self.publish_chat("assistant", f"I failed after {self.max_replans} attempts. Last error: {result['message']}")
                     self._reset_to_idle()
                     return
-        
-        self.publish_chat("assistant", """
-                          DONE !⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-                          ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣤⢤⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-                          ⠀⠀⢀⡤⠖⠒⠒⢤⡀⠀⠀⢫⠀⠀⠀⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-                          ⠀⢀⡾⣤⣄⡀⠀⢀⠷⣄⢀⡼⠀⠀⠀⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-                          ⠀⠸⣷⣾⣿⡇⠀⣿⣾⡟⣼⡧⠖⠒⠒⠓⠒⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-                          ⠀⠀⠫⣉⠉⠀⠀⣉⣟⣸⠸⡀⠀⣀⣀⠀⠤⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-                          ⠀⢀⡤⠚⠓⠒⠋⠁⡤⢍⡆⡏⠁⠀⠀⠀⠀⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-                          ⠠⣏⠔⡆⠀⣀⡀⠀⡇⠀⠣⣽⡉⠁⠀⠉⠉⢹⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-                          ⠀⠀⠀⡇⡸⠁⠙⢄⠃⠀⠀⠈⠯⠭⠥⠤⠎⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-""")
+
+        self.publish_chat("assistant", "DONE!")
         self.publish_status("completed", "All actions executed successfully")
         self._reset_to_idle()
 
@@ -290,53 +302,60 @@ class CommanderNode(Node):
         obj_name = params['object_name']
         obj_data = self.get_world_state().get(obj_name, {})
         position = obj_data.get('position')
-        
-        goal = NavigateToObject.Goal()
-        goal.object_name = obj_name
-        if position:
-            goal.target_position = [float(position[0]), float(position[1]), float(position[2])]
-        
-        future = self.navigate_client.send_goal_async(goal)
-        start = time.time()
-        while not future.done() and time.time() - start < 5.0:
-            time.sleep(0.01)
-        if not future.done():
-            return {"success": False, "message": "Navigate timeout"}
-        
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            return {"success": False, "message": "Navigate rejected"}
-        
+
+        if not position:
+            return {"success": False, "message": f"'{obj_name}' not found in world model"}
+
+        if not self.navigate_client.wait_for_server(timeout_sec=5.0):
+            return {"success": False, "message": "A* Navigator /navigate_to_goal unavailable"}
+
+        goal = Navigate.Goal()
+        goal.x = float(position[0])
+        goal.y = float(position[1])
+
+        self.get_logger().info(f"[NAVIGATE] Sending goal → {obj_name} "
+                            f"({position[0]:.2f}, {position[1]:.2f})")
+
+        send_future = self.navigate_client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self, send_future, timeout_sec=5.0)
+        if not send_future.done():
+            return {"success": False, "message": "Navigation goal send timeout"}
+
+        goal_handle = send_future.result()
+        if not goal_handle or not goal_handle.accepted:
+            return {"success": False, "message": "Navigation goal rejected"}
+
         result_future = goal_handle.get_result_async()
-        start = time.time()
-        while not result_future.done() and time.time() - start < 60.0:
-            time.sleep(0.01)
-        
+        rclpy.spin_until_future_complete(self, result_future, timeout_sec=120.0)
+
         if not result_future.done():
-            return {"success": False, "message": "Navigate result timeout"}
-        
+            goal_handle.cancel_goal_async()
+            return {"success": False, "message": "Navigation timed out (2 min)"}
+
         result = result_future.result().result
         return {"success": result.success, "message": result.message}
 
     def _do_pick(self, params):
+        self.get_logger().info("Called Pick Action")
         obj_name = params['object_name']
         obj_data = self.get_world_state().get(obj_name, {})
         position = obj_data.get('position', [0, 0, 0])
-        
-        goal = PickObject.Goal()
+        grasp_direction = "Top"
+
+        goal = ArmManipulation.Goal()
         goal.object_name = obj_name
         goal.object_position = [float(position[0]), float(position[1]), float(position[2])]
-        
-        future = self.pick_client.send_goal_async(goal)
-        while not future.done():
-            time.sleep(0.01)
-        goal_handle = future.result()
-        if not goal_handle.accepted:
+        goal.orientation = [-80.0, 10.0, -90.0]
+        goal.grasp_direction = grasp_direction
+
+        send_future = self.arm_client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self, send_future)
+        goal_handle = send_future.result()
+        if not goal_handle or not goal_handle.accepted:
             return {"success": False, "message": "Pick rejected"}
-        
+
         result_future = goal_handle.get_result_async()
-        while not result_future.done():
-            time.sleep(0.01)
+        rclpy.spin_until_future_complete(self, result_future)
         result = result_future.result().result
         return {"success": result.success, "message": result.message}
 
@@ -345,22 +364,20 @@ class CommanderNode(Node):
         target = params.get('target_location', '')
         target_data = self.get_world_state().get(target, {})
         position = target_data.get('position', [0, 0, 0])
-        
-        goal = PlaceObject.Goal()
-        goal.object_name = obj_name
-        goal.target_position = [float(position[0]), float(position[1]), float(position[2])]
-        goal.target_location_name = target
-        
-        future = self.place_client.send_goal_async(goal)
-        while not future.done():
-            time.sleep(0.01)
-        goal_handle = future.result()
-        if not goal_handle.accepted:
+
+        goal = ArmManipulation.Goal()
+        goal.object_name = target
+        goal.object_position = [float(position[0]), float(position[1]), float(position[2])]
+        goal.orientation = [-80.0, 10.0, -90.0]
+
+        send_future = self.arm_client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self, send_future)
+        goal_handle = send_future.result()
+        if not goal_handle or not goal_handle.accepted:
             return {"success": False, "message": "Place rejected"}
-        
+
         result_future = goal_handle.get_result_async()
-        while not result_future.done():
-            time.sleep(0.01)
+        rclpy.spin_until_future_complete(self, result_future)
         result = result_future.result().result
         return {"success": result.success, "message": result.message}
 
@@ -370,26 +387,23 @@ class CommanderNode(Node):
         distance = params['distance_meters']
         obj_data = self.get_world_state().get(obj_name, {})
         position = obj_data.get('position', [0, 0, 0])
-        
+
         goal = SlideObject.Goal()
         goal.object_name = obj_name
         goal.object_position = [float(position[0]), float(position[1]), float(position[2])]
         goal.direction = direction
         goal.distance = distance
-        
-        future = self.slide_client.send_goal_async(goal)
-        while not future.done():
-            time.sleep(0.01)
-        goal_handle = future.result()
-        if not goal_handle.accepted:
+
+        send_future = self.slide_client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self, send_future)
+        goal_handle = send_future.result()
+        if not goal_handle or not goal_handle.accepted:
             return {"success": False, "message": "Slide rejected"}
-        
+
         result_future = goal_handle.get_result_async()
-        while not result_future.done():
-            time.sleep(0.01)
+        rclpy.spin_until_future_complete(self, result_future)
         result = result_future.result().result
         return {"success": result.success, "message": result.message}
-
 
     def manual_execute_callback(self, request, response):
         test_prompt = "Move the blue cube to the shelf"
@@ -402,11 +416,11 @@ class CommanderNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = CommanderNode()
-    
+
     from rclpy.executors import MultiThreadedExecutor
     executor = MultiThreadedExecutor()
     executor.add_node(node)
-    
+
     try:
         executor.spin()
     except KeyboardInterrupt:
