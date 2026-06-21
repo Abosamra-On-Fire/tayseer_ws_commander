@@ -7,6 +7,7 @@ from std_srvs.srv import Trigger
 from tayseer_interfaces.srv import GetObjectLocation, ListObjects
 from tayseer_interfaces.action import ArmManipulation, SlideObject
 from tayseer_interfaces.action import Navigate
+from nav2_msgs.action import NavigateToPose 
 from tayseer_commander.llm_client import GroqLLMClient
 import json
 import threading
@@ -31,7 +32,8 @@ class CommanderNode(Node):
         self.list_objects_cli.wait_for_service(timeout_sec=10.0)
 
         # act clients
-        self.navigate_client = ActionClient(self, Navigate, '/navigate_to_goal')
+        # self.navigate_client = ActionClient(self, Navigate, '/navigate_to_goal')
+        self.navigate_client = ActionClient(self, NavigateToPose, '/navigate_to_pose')
         self.arm_client = ActionClient(self, ArmManipulation, '/arm_manipulate')
         self.slide_client = ActionClient(self, SlideObject, '/slide_object')
 
@@ -306,34 +308,54 @@ class CommanderNode(Node):
         if not position:
             return {"success": False, "message": f"'{obj_name}' not found in world model"}
 
+        # Build the Nav2 goal
+        goal = NavigateToPose.Goal()
+        goal.pose = PoseStamped()
+        goal.pose.header.frame_id = 'map'
+        goal.pose.header.stamp = self.get_clock().now().to_msg()
+        goal.pose.pose.position.x = float(position[0])
+        goal.pose.pose.position.y = float(position[1])
+        goal.pose.pose.position.z = 0.0          # Nav2 operates in 2D
+        goal.pose.pose.orientation.w = 1.0       # No preferred heading
+
+        # Wait for server if it wasn't ready at startup
         if not self.navigate_client.wait_for_server(timeout_sec=5.0):
-            return {"success": False, "message": "A* Navigator /navigate_to_goal unavailable"}
+            return {"success": False, "message": "Nav2 /navigate_to_pose unavailable"}
 
-        goal = Navigate.Goal()
-        goal.x = float(position[0])
-        goal.y = float(position[1])
+        future = self.navigate_client.send_goal_async(goal)
+        start = time.time()
+        while not future.done() and time.time() - start < 5.0:
+            time.sleep(0.01)
+        if not future.done():
+            return {"success": False, "message": "Nav2 goal send timeout"}
 
-        self.get_logger().info(f"[NAVIGATE] Sending goal → {obj_name} "
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            return {"success": False, "message": "Nav2 rejected the goal"}
+
+        self.get_logger().info(f"[NAVIGATE] Nav2 accepted goal → heading to {obj_name} "
                             f"({position[0]:.2f}, {position[1]:.2f})")
 
-        send_future = self.navigate_client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self, send_future, timeout_sec=5.0)
-        if not send_future.done():
-            return {"success": False, "message": "Navigation goal send timeout"}
-
-        goal_handle = send_future.result()
-        if not goal_handle or not goal_handle.accepted:
-            return {"success": False, "message": "Navigation goal rejected"}
-
         result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future, timeout_sec=120.0)
+        start = time.time()
+        while not result_future.done() and time.time() - start < 120.0: #eb2a 2a3mlo CONST
+            time.sleep(0.1)
 
         if not result_future.done():
             goal_handle.cancel_goal_async()
-            return {"success": False, "message": "Navigation timed out (2 min)"}
+            return {"success": False, "message": "Nav2 navigation timed out (2 min)"}
 
-        result = result_future.result().result
-        return {"success": result.success, "message": result.message}
+        # Nav2 result has no boolean field — success is conveyed via GoalStatus
+        status = result_future.result().status
+        if status == GoalStatus.STATUS_SUCCEEDED:
+            return {"success": True, "message": f"Arrived at {obj_name}"}
+        else:
+            status_names = {
+                GoalStatus.STATUS_ABORTED:   "ABORTED",
+                GoalStatus.STATUS_CANCELED:  "CANCELED",
+            }
+            label = status_names.get(status, f"status={status}")
+            return {"success": False, "message": f"Nav2 navigation {label} for {obj_name}"}
 
     def _do_pick(self, params):
         self.get_logger().info("Called Pick Action")
