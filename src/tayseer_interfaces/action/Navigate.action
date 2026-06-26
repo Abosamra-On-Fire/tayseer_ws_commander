@@ -1,0 +1,14 @@
+# Goal
+float32 x
+float32 y
+---
+# Result
+bool success
+string message
+---
+# Feedback
+geometry_msgs/Pose current_pose
+float32 distance_to_goal
+uint32 current_waypoint
+uint32 total_waypoints
+string status

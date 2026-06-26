@@ -19,7 +19,14 @@ ros_node = None
 executor = None
 ros_thread = None
 
-def load_html() -> str:
+# 1. Define Paths
+SHARE_DIR = get_package_share_directory('tayseer_web')
+WEB_DIR = os.path.join(SHARE_DIR, 'web')
+
+# 2. Mount static files (CSS, JS, Images) to the /static route
+app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+
+def load_html():
     html_path = os.path.join(
         get_package_share_directory('tayseer_web'),
         'web',

@@ -1,0 +1,152 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: linear-gradient(135deg, #051a1a 0%, #0a3d3d 100%);
+    color: #ccf5f5;
+    height: 100vh;
+    display: flex;
+    overflow: hidden;
+}
+
+/* Sidebar */
+.sidebar {
+    width: 280px;
+    background: rgba(5, 26, 26, 0.9);
+    border-right: 1px solid #0f5c5c;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+}
+.sidebar h2 { font-size: 14px; text-transform: uppercase; color: #88dddd; margin-bottom: 16px; }
+.world-list { flex: 1; overflow-y: auto; }
+.object-card {
+    background: rgba(15, 92, 92, 0.4);
+    border: 1px solid #0f5c5c;
+    border-radius: 10px;
+    padding: 12px;
+    margin-bottom: 10px;
+    font-size: 13px;
+}
+.object-name { font-weight: 600; color: #20b2b2; margin-bottom: 4px; }
+.object-coords { font-family: monospace; color: #147a7a; font-size: 12px; }
+
+/* Main Area */
+.main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+.header {
+    padding: 20px 30px;
+    border-bottom: 1px solid #0f5c5c;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.header h1 { font-size: 20px; color: #20b2b2; }
+
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+}
+.header-logo-left {
+    height: 36px; 
+    width: auto;
+    object-fit: contain;
+}
+.logo {
+    height: 40px;
+    width: auto;
+    object-fit: contain;
+}
+
+.conn { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; transition: 0.3s; }
+.dot.connected { background: #22c55e; box-shadow: 0 0 10px #22c55e; }
+
+/* Chat Area */
+.chat-area {
+    flex: 1;
+    overflow-y: auto;
+    padding: 30px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.msg {
+    max-width: 70%;
+    padding: 14px 18px;
+    border-radius: 16px;
+    font-size: 15px;
+    line-height: 1.5;
+    animation: fadeIn 0.3s ease;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.msg.user { align-self: flex-end; background: linear-gradient(135deg, #20b2b2 0%, #147a7a 100%); color: #051a1a; border-bottom-right-radius: 4px; }
+.msg.bot { align-self: flex-start; background: rgba(15, 92, 92, 0.6); border: 1px solid #0f5c5c; border-bottom-left-radius: 4px; }
+.msg.bot.thinking { color: #88dddd; font-style: italic; }
+.options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+.option-btn {
+    padding: 8px 16px;
+    background: rgba(32, 178, 178, 0.1);
+    border: 1px solid #20b2b2;
+    border-radius: 20px;
+    color: #20b2b2;
+    font-size: 13px;
+    cursor: pointer;
+    transition: 0.2s;
+}
+.option-btn:hover { background: #20b2b2; color: #051a1a; }
+
+/* Input Area */
+.input-area {
+    padding: 20px 30px;
+    border-top: 1px solid #0f5c5c;
+    display: flex;
+    gap: 12px;
+}
+.input-area input {
+    flex: 1;
+    padding: 14px 20px;
+    background: rgba(5, 26, 26, 0.6);
+    border: 1px solid #0f5c5c;
+    border-radius: 12px;
+    color: #ccf5f5;
+    font-size: 15px;
+    outline: none;
+}
+.input-area input:focus { border-color: #20b2b2; }
+.input-area button {
+    padding: 14px 28px;
+    background: linear-gradient(135deg, #20b2b2 0%, #147a7a 100%);
+    border: none;
+    border-radius: 12px;
+    color: #051a1a;
+    font-weight: 700;
+    font-size: 15px;
+    cursor: pointer;
+}
+.input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Status Bar */
+.status-bar {
+    padding: 8px 30px;
+    background: rgba(5, 26, 26, 0.6);
+    border-top: 1px solid #0f5c5c;
+    font-size: 12px;
+    color: #147a7a;
+    display: flex;
+    gap: 20px;
+}
+.status-badge { display: flex; align-items: center; gap: 6px; }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: #147a7a; }
+.status-dot.planning { background: #f59e0b; }
+.status-dot.executing { background: #20b2b2; }
+.status-dot.completed { background: #22c55e; }
+.status-dot.failed { background: #ef4444; }
