@@ -6,13 +6,14 @@ from ament_index_python.packages import get_package_share_directory
 from typing import List, Dict, Any
 
 
-class LLMClient:
+class GroqLLMClient:
     PROMPT_PATH = os.path.join(
         get_package_share_directory('tayseer_commander'),
         'config',
         'system_prompt.txt'
     )
 
+    # Native tool schema — the model is FORCED to call this function
     TOOL_SCHEMA = {
         "type": "function",
         "function": {
@@ -41,7 +42,7 @@ class LLMClient:
                             "properties": {
                                 "action": {
                                     "type": "string",
-                                    "enum": ["navigate_to", "pick", "place"],
+                                    "enum": ["navigate_to", "pick", "place", "slide"],
                                     "description": "Action name"
                                 },
                                 "params": {
@@ -75,7 +76,7 @@ class LLMClient:
         }
     }
 
-    def __init__(self, api_key= None):
+    def __init__(self, api_key: str = None):
         self.api_key = api_key or os.getenv('GROQ_API_KEY')
         if not self.api_key:
             raise ValueError("Groq API key required. Set GROQ_API_KEY env var.")
@@ -84,12 +85,17 @@ class LLMClient:
             base_url="https://api.groq.com/openai/v1",
             api_key=self.api_key
         )
+        # NOTE: If function calling is not supported on this model, switch to:
+        # "llama-3.3-70b-versatile" or "mixtral-8x7b-32768"
         self.model = "openai/gpt-oss-120b"
 
         with open(self.PROMPT_PATH, 'r', encoding='utf-8') as f:
             self.system_prompt = f.read()
 
-    def generate_response(self, messages, world_state):
+    def generate_response(self, messages: list, world_state: dict) -> dict:
+        """
+        Calls the LLM with forced tool use. Returns a validated dict.
+        """
         world_state_json = json.dumps(world_state, indent=2)
         system_prompt = self.system_prompt.replace("{world_state_json}", world_state_json)
         api_messages = [{"role": "system", "content": system_prompt}]
@@ -173,3 +179,20 @@ class LLMClient:
                 "question": "I'm having trouble connecting. Can you try again?",
                 "error": True
             }
+
+    def generate_plan(self, user_prompt: str, world_state: Dict[str, Any]) -> Dict[str, Any]:
+        """Legacy entrypoint — delegates to generate_response for consistency."""
+        messages = [{"role": "user", "content": user_prompt}]
+        return self.generate_response(messages, world_state)
+
+    def replan(self, user_prompt: str, world_state: Dict,
+               failed_action: Dict, failure_reason: str) -> Dict[str, Any]:
+        """Replan after a failed action."""
+        prompt_addition = f"""
+PREVIOUS PLAN FAILED
+Failed action: {json.dumps(failed_action)}
+Reason: {failure_reason}
+Please generate a new plan considering this failure.
+"""
+        messages = [{"role": "user", "content": user_prompt + prompt_addition}]
+        return self.generate_response(messages, world_state)
